@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:async';
 import '../../data/models/ssh_host.dart';
-import '../../core/services/ssh_service.dart';
+import '../../core/services/ssh_connection_service.dart';
+import '../../core/utils/logger.dart';
+import '../../core/terminal/terminal_buffer.dart';
+import 'terminal_renderer.dart';
 
-/// SSH终端组件
+/// SSH终端组件 - 使用dartssh2重新实现
 class SSHTerminal extends StatefulWidget {
   final SSHHost host;
   final VoidCallback? onClose;
@@ -19,217 +23,48 @@ class SSHTerminal extends StatefulWidget {
 }
 
 class _SSHTerminalState extends State<SSHTerminal> {
-  final TextEditingController _commandController = TextEditingController();
-  final ScrollController _scrollController = ScrollController();
-  final FocusNode _commandFocusNode = FocusNode();
-  
-  SSHConnection? _connection;
-  final List<String> _output = [];
-  final List<String> _commandHistory = [];
-  int _historyIndex = -1;
+  SSHConnectionService? _connection;
   bool _isConnecting = false;
   String? _error;
+  
+  // 终端缓冲区
+  late TerminalBuffer _terminalBuffer;
+
+  // 终端状态
+  String _lastOutput = ''; // 用于检测重复输出
+  int _lastOutputTime = 0; // 最后输出时间，用于重复检测
+
+  // 控制器
+  final ScrollController _scrollController = ScrollController();
+  final FocusNode _focusNode = FocusNode();
+
+  // 流订阅
+  StreamSubscription<String>? _outputSubscription;
+  StreamSubscription<String>? _errorSubscription;
 
   @override
   void initState() {
     super.initState();
+
+    // 初始化终端缓冲区 (120列 x 30行)
+    _terminalBuffer = TerminalBuffer(width: 120, height: 30);
+
     _connectToHost();
+
+    // 请求焦点
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _focusNode.requestFocus();
+    });
   }
 
   @override
   void dispose() {
-    _commandController.dispose();
+    _outputSubscription?.cancel();
+    _errorSubscription?.cancel();
+    _connection?.dispose();
     _scrollController.dispose();
-    _commandFocusNode.dispose();
-    _connection?.disconnect();
+    _focusNode.dispose();
     super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        // 终端头部
-        _buildTerminalHeader(),
-        // 终端内容
-        Expanded(
-          child: _buildTerminalContent(),
-        ),
-        // 命令输入区域
-        _buildCommandInput(),
-      ],
-    );
-  }
-
-  /// 构建终端头部
-  Widget _buildTerminalHeader() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceVariant,
-        border: Border(
-          bottom: BorderSide(
-            color: Theme.of(context).dividerColor,
-          ),
-        ),
-      ),
-      child: Row(
-        children: [
-          // 连接状态指示器
-          Container(
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(
-              color: _getStatusColor(),
-              shape: BoxShape.circle,
-            ),
-          ),
-          const SizedBox(width: 8),
-          // 主机信息
-          Expanded(
-            child: Text(
-              '${widget.host.username}@${widget.host.host}:${widget.host.port}',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                fontFamily: 'monospace',
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-          // 操作按钮
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              IconButton(
-                onPressed: _clearTerminal,
-                icon: const Icon(Icons.clear_all, size: 18),
-                tooltip: '清空终端',
-              ),
-              IconButton(
-                onPressed: _isConnecting ? null : _reconnect,
-                icon: _isConnecting 
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.refresh, size: 18),
-                tooltip: '重新连接',
-              ),
-              IconButton(
-                onPressed: widget.onClose,
-                icon: const Icon(Icons.close, size: 18),
-                tooltip: '关闭',
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 构建终端内容
-  Widget _buildTerminalContent() {
-    return Container(
-      color: Colors.black,
-      padding: const EdgeInsets.all(8),
-      child: Column(
-        children: [
-          // 输出区域
-          Expanded(
-            child: ListView.builder(
-              controller: _scrollController,
-              itemCount: _output.length,
-              itemBuilder: (context, index) {
-                return SelectableText(
-                  _output[index],
-                  style: const TextStyle(
-                    color: Colors.green,
-                    fontFamily: 'monospace',
-                    fontSize: 14,
-                  ),
-                );
-              },
-            ),
-          ),
-          // 错误信息
-          if (_error != null) ...[
-            const SizedBox(height: 8),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.red.withOpacity(0.2),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                _error!,
-                style: const TextStyle(
-                  color: Colors.red,
-                  fontFamily: 'monospace',
-                  fontSize: 12,
-                ),
-              ),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-
-  /// 构建命令输入区域
-  Widget _buildCommandInput() {
-    return Container(
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        border: Border(
-          top: BorderSide(
-            color: Theme.of(context).dividerColor,
-          ),
-        ),
-      ),
-      child: Row(
-        children: [
-          // 提示符
-          Text(
-            '${widget.host.username}@${widget.host.host}:\$ ',
-            style: const TextStyle(
-              color: Colors.green,
-              fontFamily: 'monospace',
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          // 命令输入框
-          Expanded(
-            child: TextField(
-              controller: _commandController,
-              focusNode: _commandFocusNode,
-              style: const TextStyle(
-                fontFamily: 'monospace',
-              ),
-              decoration: const InputDecoration(
-                border: InputBorder.none,
-                hintText: '输入命令...',
-                isDense: true,
-              ),
-              enabled: _connection?.isConnected == true,
-              onSubmitted: _executeCommand,
-              onChanged: (value) {
-                _historyIndex = -1; // 重置历史索引
-              },
-            ),
-          ),
-          // 发送按钮
-          IconButton(
-            onPressed: _connection?.isConnected == true 
-                ? () => _executeCommand(_commandController.text)
-                : null,
-            icon: const Icon(Icons.send),
-            tooltip: '执行命令',
-          ),
-        ],
-      ),
-    );
   }
 
   /// 连接到主机
@@ -240,69 +75,252 @@ class _SSHTerminalState extends State<SSHTerminal> {
     });
 
     try {
-      _addOutput('正在连接到 ${widget.host.name}...');
+      final connectionId = '${widget.host.id}_${DateTime.now().millisecondsSinceEpoch}';
+      _connection = SSHConnectionService(connectionId, widget.host);
       
-      _connection = await SSHService().connect(widget.host);
-      
-      // 监听输出
-      _connection!.output.listen((output) {
-        _addOutput(output);
+      // 监听输出流
+      _outputSubscription = _connection!.outputStream.listen((output) {
+        if (mounted) {
+          _processOutput(output);
+        }
       });
       
-      // 监听错误
-      _connection!.error.listen((error) {
-        _addOutput('错误: $error');
+      // 监听错误流
+      _errorSubscription = _connection!.errorStream.listen((error) {
+        if (mounted) {
+          setState(() {
+            _terminalBuffer.write('\r\n错误: $error\r\n');
+          });
+        }
       });
       
-      _addOutput('连接成功！');
-      _commandFocusNode.requestFocus();
+      // 建立连接
+      await _connection!.connect();
+      
+      setState(() {
+        _isConnecting = false;
+      });
+      
+      AppLogger.info('SSH终端连接成功: ${widget.host.name}', tag: 'SSHTerminal');
       
     } catch (e) {
       setState(() {
         _error = e.toString();
-      });
-      _addOutput('连接失败: $e');
-    } finally {
-      setState(() {
         _isConnecting = false;
       });
+      AppLogger.exception('SSHTerminal', 'connect', e);
     }
   }
 
-  /// 执行命令
-  Future<void> _executeCommand(String command) async {
-    if (command.trim().isEmpty || _connection?.isConnected != true) {
+  /// 处理输出
+  void _processOutput(String output) {
+    if (output.isEmpty) return;
+
+    // 改进的重复检测 - 更加智能
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    // 只过滤非常短的重复空白输出
+    if (output == _lastOutput &&
+        output.length <= 3 &&
+        output.trim().isEmpty &&
+        (now - _lastOutputTime) < 50) {
+      AppLogger.debug('过滤重复空输出: ${output.replaceAll('\n', '\\n').replaceAll('\r', '\\r')}', tag: 'SSHTerminal');
       return;
     }
 
-    try {
-      // 添加到历史记录
-      if (!_commandHistory.contains(command)) {
-        _commandHistory.add(command);
-      }
-      
-      // 显示命令
-      _addOutput('${widget.host.username}@${widget.host.host}:\$ $command');
-      
-      // 执行命令
-      await _connection!.executeCommand(command);
-      
-      // 清空输入框
-      _commandController.clear();
-      _historyIndex = -1;
-      
-    } catch (e) {
-      _addOutput('命令执行失败: $e');
+    _lastOutput = output;
+    _lastOutputTime = now;
+
+    setState(() {
+      // 直接写入终端缓冲区
+      _terminalBuffer.write(output);
+    });
+    _scrollToBottom();
+  }
+
+
+
+  /// 处理键盘事件
+  void _handleKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return;
+
+    final key = event.logicalKey;
+
+    // Ctrl组合键处理
+    if (HardwareKeyboard.instance.isControlPressed) {
+      _handleControlKey(key);
+      return;
+    }
+
+    // Alt组合键处理
+    if (HardwareKeyboard.instance.isAltPressed) {
+      _handleAltKey(key);
+      return;
+    }
+
+    // 功能键处理 - 必须在字符处理之前
+    if (_isFunctionKey(key)) {
+      _handleFunctionKey(key);
+      return;
+    }
+
+    // 可打印字符处理
+    if (event.character != null &&
+        event.character!.isNotEmpty &&
+        _isPrintableCharacter(event.character!)) {
+      _handleCharacterInput(event.character!);
     }
   }
 
-  /// 添加输出
-  void _addOutput(String text) {
-    setState(() {
-      _output.add(text);
-    });
-    
-    // 自动滚动到底部
+  /// 判断是否为功能键
+  bool _isFunctionKey(LogicalKeyboardKey key) {
+    return key == LogicalKeyboardKey.enter ||
+           key == LogicalKeyboardKey.backspace ||
+           key == LogicalKeyboardKey.delete ||
+           key == LogicalKeyboardKey.tab ||
+           key == LogicalKeyboardKey.escape ||
+           key == LogicalKeyboardKey.arrowUp ||
+           key == LogicalKeyboardKey.arrowDown ||
+           key == LogicalKeyboardKey.arrowLeft ||
+           key == LogicalKeyboardKey.arrowRight ||
+           key == LogicalKeyboardKey.home ||
+           key == LogicalKeyboardKey.end ||
+           key == LogicalKeyboardKey.pageUp ||
+           key == LogicalKeyboardKey.pageDown ||
+           key == LogicalKeyboardKey.insert ||
+           key.keyId >= LogicalKeyboardKey.f1.keyId &&
+           key.keyId <= LogicalKeyboardKey.f12.keyId;
+  }
+
+  /// 判断是否为可打印字符
+  bool _isPrintableCharacter(String character) {
+    if (character.length != 1) return false;
+    final code = character.codeUnitAt(0);
+
+    // 排除控制字符
+    if (code < 32) return false;
+
+    // 排除DEL字符
+    if (code == 127) return false;
+
+    // 可打印ASCII字符范围：32-126
+    // 扩展ASCII和Unicode字符：128以上
+    return (code >= 32 && code <= 126) || code >= 128;
+  }
+
+  /// 处理功能键
+  void _handleFunctionKey(LogicalKeyboardKey key) {
+    if (key == LogicalKeyboardKey.enter) {
+      AppLogger.debug('回车键按下', tag: 'SSHTerminal');
+      _sendToSSH('\r');
+    } else if (key == LogicalKeyboardKey.backspace) {
+      AppLogger.debug('退格键按下', tag: 'SSHTerminal');
+      _sendToSSH('\x7f'); // 标准退格序列
+    } else if (key == LogicalKeyboardKey.delete) {
+      AppLogger.debug('删除键按下', tag: 'SSHTerminal');
+      _sendToSSH('\x1b[3~'); // 标准删除键序列
+    } else if (key == LogicalKeyboardKey.tab) {
+      AppLogger.debug('Tab键按下', tag: 'SSHTerminal');
+      _sendToSSH('\t');
+    } else if (key == LogicalKeyboardKey.escape) {
+      AppLogger.debug('Esc键按下', tag: 'SSHTerminal');
+      _sendToSSH('\x1b');
+    } else if (key == LogicalKeyboardKey.arrowUp) {
+      AppLogger.debug('上方向键按下', tag: 'SSHTerminal');
+      _sendToSSH('\x1b[A');
+    } else if (key == LogicalKeyboardKey.arrowDown) {
+      AppLogger.debug('下方向键按下', tag: 'SSHTerminal');
+      _sendToSSH('\x1b[B');
+    } else if (key == LogicalKeyboardKey.arrowRight) {
+      AppLogger.debug('右方向键按下', tag: 'SSHTerminal');
+      _sendToSSH('\x1b[C');
+    } else if (key == LogicalKeyboardKey.arrowLeft) {
+      AppLogger.debug('左方向键按下', tag: 'SSHTerminal');
+      _sendToSSH('\x1b[D');
+    } else if (key == LogicalKeyboardKey.home) {
+      _sendToSSH('\x1b[H');
+    } else if (key == LogicalKeyboardKey.end) {
+      _sendToSSH('\x1b[F');
+    } else if (key == LogicalKeyboardKey.pageUp) {
+      _sendToSSH('\x1b[5~');
+    } else if (key == LogicalKeyboardKey.pageDown) {
+      _sendToSSH('\x1b[6~');
+    } else if (key == LogicalKeyboardKey.insert) {
+      _sendToSSH('\x1b[2~');
+    } else if (key.keyId >= LogicalKeyboardKey.f1.keyId &&
+               key.keyId <= LogicalKeyboardKey.f12.keyId) {
+      // F1-F12功能键
+      int fNum = key.keyId - LogicalKeyboardKey.f1.keyId + 1;
+      if (fNum <= 4) {
+        _sendToSSH('\x1b[${10 + fNum}~'); // F1-F4
+      } else if (fNum <= 6) {
+        _sendToSSH('\x1b[${11 + fNum}~'); // F5-F6
+      } else if (fNum <= 12) {
+        _sendToSSH('\x1b[${12 + fNum}~'); // F7-F12
+      }
+    }
+  }
+
+  /// 处理Alt组合键
+  void _handleAltKey(LogicalKeyboardKey key) {
+    // Alt+字符组合键处理
+    AppLogger.debug('Alt组合键: $key', tag: 'SSHTerminal');
+    // 大多数Alt组合键发送ESC前缀
+    if (key.keyLabel.length == 1) {
+      _sendToSSH('\x1b${key.keyLabel.toLowerCase()}');
+    }
+  }
+
+  /// 处理Ctrl组合键
+  void _handleControlKey(LogicalKeyboardKey key) {
+    if (key == LogicalKeyboardKey.keyC) {
+      // Ctrl+C
+      _sendToSSH('\x03');
+    } else if (key == LogicalKeyboardKey.keyD) {
+      // Ctrl+D
+      _sendToSSH('\x04');
+    } else if (key == LogicalKeyboardKey.keyL) {
+      // Ctrl+L (清屏)
+      setState(() {
+        _terminalBuffer.clear();
+      });
+      _sendToSSH('\x0c');
+    } else if (key == LogicalKeyboardKey.keyZ) {
+      // Ctrl+Z
+      _sendToSSH('\x1a');
+    }
+  }
+
+  /// 处理字符输入
+  void _handleCharacterInput(String character) {
+    // 只过滤真正的控制字符，保留可打印字符
+    final code = character.codeUnitAt(0);
+    if (code < 32 && character != '\t') {
+      AppLogger.debug('过滤控制字符: $code', tag: 'SSHTerminal');
+      return;
+    }
+
+    AppLogger.debug('字符输入: $character (code: $code)', tag: 'SSHTerminal');
+
+    // 直接发送字符到SSH，不在本地跟踪
+    _sendToSSH(character);
+  }
+
+  /// 发送数据到SSH
+  void _sendToSSH(String data) {
+    try {
+      _connection?.sendInput(data);
+      AppLogger.debug('发送到SSH: ${data.replaceAll('\n', '\\n').replaceAll('\r', '\\r')}', tag: 'SSHTerminal');
+    } catch (e) {
+      AppLogger.exception('SSHTerminal', 'sendToSSH', e);
+      setState(() {
+        _terminalBuffer.write('\r\n发送失败: $e\r\n');
+      });
+    }
+  }
+
+  /// 滚动到底部
+  void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
@@ -314,32 +332,117 @@ class _SSHTerminalState extends State<SSHTerminal> {
     });
   }
 
-  /// 清空终端
-  void _clearTerminal() {
-    setState(() {
-      _output.clear();
-      _error = null;
-    });
-  }
-
-  /// 重新连接
-  Future<void> _reconnect() async {
-    await _connection?.disconnect();
-    _connection = null;
-    _clearTerminal();
-    await _connectToHost();
-  }
-
-  /// 获取状态颜色
-  Color _getStatusColor() {
+  @override
+  Widget build(BuildContext context) {
     if (_isConnecting) {
-      return Colors.orange;
-    } else if (_connection?.isConnected == true) {
-      return Colors.green;
-    } else if (_error != null) {
-      return Colors.red;
-    } else {
-      return Colors.grey;
+      return const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text('正在连接SSH...'),
+          ],
+        ),
+      );
     }
+
+    if (_error != null) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.error, color: Colors.red, size: 48),
+            const SizedBox(height: 16),
+            Text('连接失败: $_error'),
+            const SizedBox(height: 16),
+            ElevatedButton(
+              onPressed: _connectToHost,
+              child: const Text('重新连接'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return GestureDetector(
+      onTap: () => _focusNode.requestFocus(),
+      child: Container(
+        color: const Color(0xFF0C0C0C), // 深黑色背景
+        child: KeyboardListener(
+          focusNode: _focusNode,
+          onKeyEvent: _handleKeyEvent,
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 终端输出区域
+                Expanded(
+                  child: _buildTerminalContent(),
+                ),
+                // 状态栏
+                _buildStatusBar(),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 构建终端内容
+  Widget _buildTerminalContent() {
+    return TerminalScrollView(
+      buffer: _terminalBuffer,
+      showCursor: true,
+      fontSize: 14,
+      fontFamily: 'JetBrainsMono',
+      onTap: () => _focusNode.requestFocus(),
+    );
+  }
+
+  /// 构建状态栏
+  Widget _buildStatusBar() {
+    return Container(
+      height: 24,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      decoration: const BoxDecoration(
+        color: Color(0xFF21262D),
+        border: Border(
+          top: BorderSide(color: Color(0xFF30363D)),
+        ),
+      ),
+      child: Row(
+        children: [
+          // 连接状态
+          Icon(
+            _connection?.isConnected == true ? Icons.link : Icons.link_off,
+            size: 16,
+            color: _connection?.isConnected == true ? Colors.green : Colors.red,
+          ),
+          const SizedBox(width: 8),
+          // 主机信息
+          Text(
+            '${widget.host.username}@${widget.host.host}:${widget.host.port}',
+            style: const TextStyle(
+              fontSize: 12,
+              color: Color(0xFF7D8590),
+            ),
+          ),
+          const Spacer(),
+          // 关闭按钮
+          if (widget.onClose != null)
+            GestureDetector(
+              onTap: widget.onClose,
+              child: const Icon(
+                Icons.close,
+                size: 16,
+                color: Color(0xFF7D8590),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 }

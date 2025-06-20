@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import '../../data/models/ssh_host.dart';
-import '../../core/services/ssh_terminal_service.dart';
 import '../../core/utils/logger.dart';
-import '../widgets/interactive_terminal.dart';
+import '../../core/utils/ssh_debug_helper.dart';
+import '../widgets/ssh_terminal.dart';
 
 /// SSH终端页面 - 在右侧内容区域显示
 class SSHTerminalPage extends StatefulWidget {
@@ -33,9 +33,9 @@ class _SSHTerminalPageState extends State<SSHTerminalPage>
   @override
   void dispose() {
     _tabController.dispose();
-    // 关闭所有终端连接
+    // 清理所有标签页
     for (final tab in _tabs) {
-      tab.connection?.disconnect();
+      tab.dispose();
     }
     super.dispose();
   }
@@ -113,6 +113,11 @@ class _SSHTerminalPageState extends State<SSHTerminalPage>
             tooltip: '新建终端',
           ),
           IconButton(
+            onPressed: _runSSHDiagnostic,
+            icon: const Icon(Icons.bug_report),
+            tooltip: 'SSH连接诊断',
+          ),
+          IconButton(
             onPressed: _closeAllTabs,
             icon: const Icon(Icons.close_fullscreen),
             tooltip: '关闭所有终端',
@@ -175,52 +180,10 @@ class _SSHTerminalPageState extends State<SSHTerminalPage>
 
   /// 构建终端视图
   Widget _buildTerminalView(SSHTerminalTab tab) {
-    // 如果连接已建立，使用交互式终端
-    if (tab.connection != null) {
-      return InteractiveTerminal(
-        connection: tab.connection!,
-        initialOutput: tab.output,
-      );
-    }
-
-    // 连接建立前显示加载状态
-    return Container(
-      color: const Color(0xFF0D1117),
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            if (tab.isConnecting) ...[
-              const CircularProgressIndicator(
-                color: Color(0xFF58A6FF),
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                '正在建立SSH连接...',
-                style: TextStyle(
-                  color: Color(0xFFE6EDF3),
-                  fontFamily: 'JetBrainsMono',
-                ),
-              ),
-            ] else ...[
-              const Icon(
-                Icons.error_outline,
-                color: Color(0xFFFF6B6B),
-                size: 48,
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                '连接失败',
-                style: TextStyle(
-                  color: Color(0xFFE6EDF3),
-                  fontFamily: 'JetBrainsMono',
-                  fontSize: 16,
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
+    // 使用新的SSH终端组件
+    return SSHTerminal(
+      host: widget.host,
+      onClose: () => _closeTab(tab.id),
     );
   }
 
@@ -260,10 +223,8 @@ class _SSHTerminalPageState extends State<SSHTerminalPage>
   Color _getTabStatusColor(SSHTerminalTab tab) {
     if (tab.isConnecting) {
       return Colors.orange;
-    } else if (tab.connection?.isConnected == true) {
-      return Colors.green;
     } else {
-      return Colors.red;
+      return Colors.green; // 简化状态显示
     }
   }
 
@@ -296,7 +257,6 @@ class _SSHTerminalPageState extends State<SSHTerminalPage>
     if (tabIndex == -1) return;
 
     final tab = _tabs[tabIndex];
-    tab.connection?.disconnect();
     tab.dispose();
 
     setState(() {
@@ -320,7 +280,6 @@ class _SSHTerminalPageState extends State<SSHTerminalPage>
   /// 关闭所有标签页
   void _closeAllTabs() {
     for (final tab in _tabs) {
-      tab.connection?.disconnect();
       tab.dispose();
     }
 
@@ -332,23 +291,48 @@ class _SSHTerminalPageState extends State<SSHTerminalPage>
     _tabController = TabController(length: 0, vsync: this);
   }
 
+  /// 运行SSH诊断
+  Future<void> _runSSHDiagnostic() async {
+    try {
+      final debugHelper = SSHDebugHelper();
+      final report = await debugHelper.generateDiagnosticReport(widget.host);
+
+      // 显示诊断报告对话框
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('SSH连接诊断报告'),
+            content: SingleChildScrollView(
+              child: Text(
+                report,
+                style: const TextStyle(fontFamily: 'JetBrainsMono'),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('关闭'),
+              ),
+            ],
+          ),
+        );
+      }
+    } catch (e) {
+      AppLogger.exception('SSHTerminal', 'runSSHDiagnostic', e);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('诊断失败: $e')),
+        );
+      }
+    }
+  }
+
   /// 连接标签页
   Future<void> _connectTab(SSHTerminalTab tab) async {
-    tab.isConnecting = true;
-    tab.addOutput('正在连接到 ${widget.host.name} (${widget.host.host}:${widget.host.port})...');
-    tab.addOutput('使用用户名: ${widget.host.username}');
-
-    try {
-      tab.connection = await SSHTerminalService().connect(widget.host);
-      tab.addOutput('SSH连接建立成功！');
-
-    } catch (e) {
-      tab.addOutput('连接失败: $e');
-      AppLogger.exception('SSHTerminal', 'connectTab', e);
-    } finally {
-      tab.isConnecting = false;
-      setState(() {});
-    }
+    // 新的SSHTerminal组件会自己处理连接，这里只需要设置状态
+    tab.isConnecting = false;
+    AppLogger.info('创建新的SSH终端标签页: ${tab.title}', tag: 'SSHTerminal');
   }
 
 
@@ -358,22 +342,14 @@ class _SSHTerminalPageState extends State<SSHTerminalPage>
 class SSHTerminalTab {
   final String id;
   final String title;
-  final List<String> output;
-
-  SSHTerminalConnection? connection;
   bool isConnecting;
 
   SSHTerminalTab({
     required this.id,
     required this.title,
-  }) : output = [],
-       isConnecting = false;
-
-  void addOutput(String text) {
-    output.add(text);
-  }
+  }) : isConnecting = false;
 
   void dispose() {
-    connection?.disconnect();
+    // 连接现在由SSHTerminal组件管理
   }
 }

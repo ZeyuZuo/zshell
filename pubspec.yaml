@@ -67,6 +67,9 @@ dependencies:
   # 日志
   logger: ^2.0.2+1
 
+  # SSH客户端
+  dartssh2: ^2.12.0
+
 
 
 dev_dependencies:
