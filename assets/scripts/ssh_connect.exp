@@ -1,0 +1,93 @@
+#!/usr/bin/expect -f
+
+# SSH自动连接脚本
+# 用法: expect ssh_connect.exp <host> <port> <username> <password>
+
+set timeout 30
+set host [lindex $argv 0]
+set port [lindex $argv 1]
+set username [lindex $argv 2]
+set password [lindex $argv 3]
+
+# 设置环境变量
+set env(TERM) "xterm-256color"
+set env(LANG) "en_US.UTF-8"
+set env(LC_ALL) "en_US.UTF-8"
+
+# 启动SSH连接
+spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 -o RequestTTY=yes -t -p $port $username@$host
+
+# 等待密码提示并自动输入密码
+expect {
+    "*password*" {
+        send "$password\r"
+        exp_continue
+    }
+    "*Password*" {
+        send "$password\r"
+        exp_continue
+    }
+    "*(yes/no)*" {
+        send "yes\r"
+        exp_continue
+    }
+    "*$*" {
+        # 连接成功，进入交互模式
+        interact
+    }
+    "*#*" {
+        # 连接成功，进入交互模式
+        interact
+    }
+    timeout {
+        puts "连接超时"
+        exit 1
+    }
+    eof {
+        puts "连接意外断开"
+        exit 1
+    }
+}
+
+expect {
+    "password:" {
+        send "$password\r"
+        exp_continue
+    }
+    "Password:" {
+        send "$password\r"
+        exp_continue
+    }
+    "yes/no" {
+        send "yes\r"
+        exp_continue
+    }
+    "\$" {
+        # 连接成功，进入交互模式
+        interact
+    }
+    "#" {
+        # 连接成功（root用户），进入交互模式
+        interact
+    }
+    "Permission denied" {
+        puts "错误: 密码错误或权限被拒绝"
+        exit 1
+    }
+    "Connection refused" {
+        puts "错误: 连接被拒绝"
+        exit 1
+    }
+    "No route to host" {
+        puts "错误: 无法到达主机"
+        exit 1
+    }
+    timeout {
+        puts "错误: 连接超时"
+        exit 1
+    }
+    eof {
+        puts "错误: 连接意外断开"
+        exit 1
+    }
+}
