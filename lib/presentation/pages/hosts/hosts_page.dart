@@ -1,12 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
 import '../../../data/models/ssh_host.dart';
 import '../../providers/ssh_host_provider.dart';
 import '../../widgets/host_card.dart';
 import '../../widgets/add_host_dialog.dart';
-import '../ssh_connection_page.dart';
-import '../debug_page.dart';
 
 /// 主机列表页面
 /// 应用的核心页面之一，负责显示和管理SSH主机列表
@@ -323,10 +320,11 @@ class _HostsPageState extends State<HostsPage> {
       // 使用回调函数在主页面中显示SSH终端
       widget.onConnectToHost!(host);
     } else {
-      // 兼容旧的导航方式
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (context) => SSHConnectionPage(host: host),
+      // 显示提示信息，因为没有提供连接回调
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('无法连接到 ${host.name}：缺少连接处理器'),
+          backgroundColor: Theme.of(context).colorScheme.error,
         ),
       );
     }

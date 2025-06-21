@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../../data/models/ssh_host.dart';
-import '../../core/utils/logger.dart';
 
 /// 主机卡片组件
 /// 用于在主机列表中显示单个SSH主机的信息

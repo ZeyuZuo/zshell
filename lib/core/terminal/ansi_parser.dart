@@ -96,14 +96,35 @@ class TerminalChar {
   }
 }
 
+/// 终端操作类型
+enum TerminalOperationType {
+  command,
+  character,
+}
+
+/// 终端操作
+class TerminalOperation {
+  final TerminalOperationType type;
+  final AnsiCommand? command;
+  final TerminalChar? character;
+
+  const TerminalOperation.command(this.command)
+      : type = TerminalOperationType.command, character = null;
+
+  const TerminalOperation.character(this.character)
+      : type = TerminalOperationType.character, command = null;
+}
+
 /// ANSI解析结果
 class AnsiParseResult {
   final List<TerminalChar> chars;
   final List<AnsiCommand> commands;
-  
+  final List<TerminalOperation> operations; // 新增：按顺序的操作列表
+
   const AnsiParseResult({
     required this.chars,
     required this.commands,
+    required this.operations,
   });
 }
 
@@ -120,6 +141,8 @@ enum AnsiCommandType {
   saveCursor,
   restoreCursor,
   setGraphicsMode,
+  setMode,
+  resetMode,
   unknown,
 }
 
@@ -146,51 +169,95 @@ class AnsiParser {
   AnsiParseResult parse(String text) {
     final chars = <TerminalChar>[];
     final commands = <AnsiCommand>[];
-    
+    final operations = <TerminalOperation>[]; // 按顺序记录操作
+
     int i = 0;
     while (i < text.length) {
-      if (text[i] == '\x1b' && i + 1 < text.length && text[i + 1] == '[') {
-        // 找到ANSI序列
-        final sequenceResult = _parseAnsiSequence(text, i);
-        if (sequenceResult != null) {
-          commands.add(sequenceResult.command);
-          if (sequenceResult.command.type == AnsiCommandType.setGraphicsMode) {
-            _applyGraphicsMode(sequenceResult.command.parameters);
+      if (text[i] == '\x1b' && i + 1 < text.length) {
+        if (text[i + 1] == '[') {
+          // CSI序列 (Control Sequence Introducer)
+          final sequenceResult = _parseAnsiSequence(text, i);
+          if (sequenceResult != null) {
+            commands.add(sequenceResult.command);
+            operations.add(TerminalOperation.command(sequenceResult.command));
+            if (sequenceResult.command.type == AnsiCommandType.setGraphicsMode) {
+              _applyGraphicsMode(sequenceResult.command.parameters);
+            }
+            i = sequenceResult.endIndex;
+          } else {
+            // 无效序列，作为普通字符处理
+            final char = TerminalChar(
+              char: text[i],
+              foregroundColor: _currentForeground,
+              backgroundColor: _currentBackground,
+              style: _currentStyle,
+            );
+            chars.add(char);
+            operations.add(TerminalOperation.character(char));
+            i++;
           }
-          i = sequenceResult.endIndex;
+        } else if (text[i + 1] == ']') {
+          // OSC序列 (Operating System Command)
+          final oscResult = _parseOscSequence(text, i);
+          if (oscResult != null) {
+            // OSC序列被解析但不显示（如窗口标题设置）
+            i = oscResult;
+          } else {
+            // 无效OSC序列，作为普通字符处理
+            final char = TerminalChar(
+              char: text[i],
+              foregroundColor: _currentForeground,
+              backgroundColor: _currentBackground,
+              style: _currentStyle,
+            );
+            chars.add(char);
+            operations.add(TerminalOperation.character(char));
+            i++;
+          }
         } else {
-          // 无效序列，作为普通字符处理
-          chars.add(TerminalChar(
-            char: text[i],
-            foregroundColor: _currentForeground,
-            backgroundColor: _currentBackground,
-            style: _currentStyle,
-          ));
-          i++;
+          // 其他转义序列的处理
+          final escapeResult = _parseOtherEscapeSequence(text, i);
+          if (escapeResult != null) {
+            // 转义序列被解析，跳过
+            i = escapeResult;
+          } else {
+            // 无效转义序列，作为普通字符处理
+            final char = TerminalChar(
+              char: text[i],
+              foregroundColor: _currentForeground,
+              backgroundColor: _currentBackground,
+              style: _currentStyle,
+            );
+            chars.add(char);
+            operations.add(TerminalOperation.character(char));
+            i++;
+          }
         }
       } else {
         // 普通字符
-        chars.add(TerminalChar(
+        final char = TerminalChar(
           char: text[i],
           foregroundColor: _currentForeground,
           backgroundColor: _currentBackground,
           style: _currentStyle,
-        ));
+        );
+        chars.add(char);
+        operations.add(TerminalOperation.character(char));
         i++;
       }
     }
-    
-    return AnsiParseResult(chars: chars, commands: commands);
+
+    return AnsiParseResult(chars: chars, commands: commands, operations: operations);
   }
   
   /// 解析单个ANSI序列
   _AnsiSequenceResult? _parseAnsiSequence(String text, int startIndex) {
     if (startIndex + 2 >= text.length) return null;
-    
+
     int i = startIndex + 2; // 跳过 '\x1b['
     final parameters = <int>[];
     String paramBuffer = '';
-    
+
     // 解析参数
     while (i < text.length) {
       final char = text[i];
@@ -208,7 +275,7 @@ class AnsiParser {
         if (paramBuffer.isNotEmpty) {
           parameters.add(int.tryParse(paramBuffer) ?? 0);
         }
-        
+
         final command = _createAnsiCommand(char, parameters, text.substring(startIndex, i + 1));
         return _AnsiSequenceResult(command: command, endIndex: i + 1);
       } else {
@@ -217,7 +284,70 @@ class AnsiParser {
       }
       i++;
     }
-    
+
+    return null;
+  }
+
+  /// 解析OSC序列 (Operating System Command)
+  /// OSC序列格式: ESC ] Ps ; Pt ST
+  /// 其中 ST 可以是 ESC \ 或 BEL (\x07)
+  int? _parseOscSequence(String text, int startIndex) {
+    if (startIndex + 2 >= text.length) return null;
+
+    int i = startIndex + 2; // 跳过 '\x1b]'
+
+    // 查找OSC序列的结束符
+    while (i < text.length) {
+      final char = text[i];
+
+      // 检查BEL终止符 (\x07)
+      if (char == '\x07') {
+        return i + 1;
+      }
+
+      // 检查ST终止符 (ESC \)
+      if (char == '\x1b' && i + 1 < text.length && text[i + 1] == '\\') {
+        return i + 2;
+      }
+
+      i++;
+    }
+
+    // 如果没有找到终止符，返回null表示无效序列
+    return null;
+  }
+
+  /// 解析其他转义序列
+  /// 处理一些常见的转义序列，如 ESC ( 、ESC ) 等
+  int? _parseOtherEscapeSequence(String text, int startIndex) {
+    if (startIndex + 1 >= text.length) return null;
+
+    final secondChar = text[startIndex + 1];
+
+    // 处理一些常见的两字符转义序列
+    switch (secondChar) {
+      case '(':  // 字符集选择 G0
+      case ')':  // 字符集选择 G1
+      case '*':  // 字符集选择 G2
+      case '+':  // 字符集选择 G3
+        // 这些序列通常后面跟一个字符
+        if (startIndex + 2 < text.length) {
+          return startIndex + 3;
+        }
+        break;
+      case '=':  // 应用键盘模式
+      case '>':  // 数字键盘模式
+      case '7':  // 保存光标
+      case '8':  // 恢复光标
+      case 'D':  // 索引 (向下滚动)
+      case 'E':  // 下一行
+      case 'H':  // 设置制表符
+      case 'M':  // 反向索引 (向上滚动)
+      case 'Z':  // 终端标识
+      case 'c':  // 重置
+        return startIndex + 2;
+    }
+
     return null;
   }
   
@@ -256,6 +386,12 @@ class AnsiParser {
         break;
       case 'm':
         type = AnsiCommandType.setGraphicsMode;
+        break;
+      case 'h':
+        type = AnsiCommandType.setMode;
+        break;
+      case 'l':
+        type = AnsiCommandType.resetMode;
         break;
       default:
         type = AnsiCommandType.unknown;

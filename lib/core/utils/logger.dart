@@ -1,5 +1,4 @@
 import 'dart:developer' as developer;
-import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 /// 应用日志工具类

@@ -11,7 +11,7 @@ class TerminalRenderer extends StatefulWidget {
   final String fontFamily;
   final EdgeInsets padding;
   final VoidCallback? onTap;
-  
+
   const TerminalRenderer({
     Key? key,
     required this.buffer,
@@ -123,10 +123,10 @@ class _TerminalPainter extends CustomPainter {
   final String fontFamily;
   final bool showCursor;
   final double cursorOpacity;
-  
+
   late final double _charWidth;
   late final double _lineHeight;
-  
+
   _TerminalPainter({
     required this.buffer,
     required this.fontSize,
@@ -160,7 +160,7 @@ class _TerminalPainter extends CustomPainter {
     // 绘制背景
     final backgroundPaint = Paint()..color = ansi.AnsiColor.defaultBackground;
     canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), backgroundPaint);
-    
+
     // 绘制每个字符
     for (int row = 0; row < buffer.height; row++) {
       for (int col = 0; col < buffer.width; col++) {
@@ -168,7 +168,7 @@ class _TerminalPainter extends CustomPainter {
         _drawChar(canvas, char, row, col);
       }
     }
-    
+
     // 绘制光标
     if (showCursor) {
       _drawCursor(canvas);
@@ -217,8 +217,8 @@ class _TerminalPainter extends CustomPainter {
       );
     }
 
-    // 绘制字符
-    if (char.char.trim().isNotEmpty) {
+    // 绘制字符 - 修复：确保空格字符也被正确渲染
+    if (char.char.isNotEmpty) {
       final textStyle = TextStyle(
         fontSize: fontSize,
         fontFamily: fontFamily,
@@ -289,21 +289,21 @@ class _TerminalPainter extends CustomPainter {
     final cursor = buffer.cursor;
     final x = cursor.col * _charWidth;
     final y = cursor.row * _lineHeight;
-    
+
     final cursorPaint = Paint()
       ..color = ansi.AnsiColor.defaultForeground.withValues(alpha: cursorOpacity)
       ..style = PaintingStyle.fill;
-    
+
     // 绘制块状光标
     canvas.drawRect(
       Rect.fromLTWH(x, y, _charWidth, _lineHeight),
       cursorPaint,
     );
-    
+
     // 如果光标位置有字符，用反色绘制
     if (cursor.row < buffer.height && cursor.col < buffer.width) {
       final char = buffer.buffer[cursor.row][cursor.col];
-      if (char.char.trim().isNotEmpty) {
+      if (char.char.isNotEmpty) {
         final textStyle = TextStyle(
           fontSize: fontSize,
           fontFamily: fontFamily,
@@ -313,12 +313,12 @@ class _TerminalPainter extends CustomPainter {
           decoration: _getTextDecoration(char.style),
           height: 1.2,
         );
-        
+
         final textPainter = TextPainter(
           text: TextSpan(text: char.char, style: textStyle),
           textDirection: TextDirection.ltr,
         );
-        
+
         textPainter.layout();
         textPainter.paint(canvas, Offset(x, y));
       }
@@ -327,23 +327,36 @@ class _TerminalPainter extends CustomPainter {
   
   @override
   bool shouldRepaint(covariant _TerminalPainter oldDelegate) {
-    return oldDelegate.buffer != buffer ||
-           oldDelegate.cursorOpacity != cursorOpacity ||
-           oldDelegate.showCursor != showCursor;
+    // 检查基本属性变化
+    if (oldDelegate.buffer != buffer ||
+        oldDelegate.cursorOpacity != cursorOpacity ||
+        oldDelegate.showCursor != showCursor) {
+      return true;
+    }
+
+    // 关键修复：检查光标位置是否改变
+    if (oldDelegate.buffer.cursor.row != buffer.cursor.row ||
+        oldDelegate.buffer.cursor.col != buffer.cursor.col) {
+      return true;
+    }
+
+    return false;
   }
 }
 
 /// 终端滚动视图组件
 class TerminalScrollView extends StatefulWidget {
   final TerminalBuffer buffer;
+  final ScrollController? scrollController;
   final bool showCursor;
   final double fontSize;
   final String fontFamily;
   final VoidCallback? onTap;
-  
+
   const TerminalScrollView({
     Key? key,
     required this.buffer,
+    this.scrollController,
     this.showCursor = true,
     this.fontSize = 14.0,
     this.fontFamily = 'JetBrainsMono',
@@ -355,12 +368,50 @@ class TerminalScrollView extends StatefulWidget {
 }
 
 class _TerminalScrollViewState extends State<TerminalScrollView> {
-  final ScrollController _scrollController = ScrollController();
-  
+  late final ScrollController _scrollController;
+  bool _ownsController = false;
+  bool _isUserScrolling = false;
+  double _lastMaxScrollExtent = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.scrollController != null) {
+      _scrollController = widget.scrollController!;
+      _ownsController = false;
+    } else {
+      _scrollController = ScrollController();
+      _ownsController = true;
+    }
+
+    // 监听滚动事件，检测用户是否在手动滚动
+    _scrollController.addListener(_onScroll);
+  }
+
   @override
   void dispose() {
-    _scrollController.dispose();
+    _scrollController.removeListener(_onScroll);
+    if (_ownsController) {
+      _scrollController.dispose();
+    }
     super.dispose();
+  }
+
+  /// 监听滚动事件
+  void _onScroll() {
+    if (_scrollController.hasClients) {
+      final currentOffset = _scrollController.offset;
+      final maxExtent = _scrollController.position.maxScrollExtent;
+
+      // 检测用户是否在手动滚动（不在底部）
+      // 使用更大的容差，因为滚动可能不够精确
+      _isUserScrolling = currentOffset < maxExtent - 50; // 50像素的容差
+
+      // 如果用户滚动到底部附近，重置用户滚动状态
+      if (currentOffset >= maxExtent - 20) {
+        _isUserScrolling = false;
+      }
+    }
   }
   
   /// 滚动到底部
@@ -375,19 +426,66 @@ class _TerminalScrollViewState extends State<TerminalScrollView> {
       }
     });
   }
+
+  /// 检查是否需要自动滚动到底部
+  void _checkAutoScroll() {
+    if (_scrollController.hasClients) {
+      final maxExtent = _scrollController.position.maxScrollExtent;
+
+      // 如果内容高度发生变化，且用户没有手动滚动，则自动滚动到底部
+      if (maxExtent != _lastMaxScrollExtent) {
+        _lastMaxScrollExtent = maxExtent;
+
+        // 在alternate screen模式下，总是自动滚动到底部
+        // 在普通模式下，只有在用户没有手动滚动时才自动滚动
+        final shouldAutoScroll = widget.buffer.isAlternateScreen || !_isUserScrolling;
+
+        if (shouldAutoScroll && maxExtent > 0) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (_scrollController.hasClients && mounted) {
+              try {
+                _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+              } catch (e) {
+                // 如果jumpTo失败，尝试animateTo
+                _scrollController.animateTo(
+                  _scrollController.position.maxScrollExtent,
+                  duration: const Duration(milliseconds: 50),
+                  curve: Curves.easeOut,
+                );
+              }
+            }
+          });
+        }
+      }
+    }
+  }
   
   @override
   Widget build(BuildContext context) {
+    // 检查是否需要自动滚动
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkAutoScroll();
+    });
+
     return Listener(
       onPointerSignal: (pointerSignal) {
         if (pointerSignal is PointerScrollEvent) {
           // 处理鼠标滚轮事件
           final delta = pointerSignal.scrollDelta.dy;
           if (_scrollController.hasClients) {
-            final newOffset = (_scrollController.offset + delta).clamp(
-              0.0,
-              _scrollController.position.maxScrollExtent,
-            );
+            final currentOffset = _scrollController.offset;
+            final maxExtent = _scrollController.position.maxScrollExtent;
+            final newOffset = (currentOffset + delta).clamp(0.0, maxExtent);
+
+            // 如果用户向上滚动，标记为手动滚动
+            if (delta > 0 && newOffset < maxExtent - 20) {
+              _isUserScrolling = true;
+            }
+            // 如果用户滚动到底部，取消手动滚动标记
+            else if (newOffset >= maxExtent - 20) {
+              _isUserScrolling = false;
+            }
+
             _scrollController.jumpTo(newOffset);
           }
         }
@@ -395,14 +493,167 @@ class _TerminalScrollViewState extends State<TerminalScrollView> {
       child: SingleChildScrollView(
         controller: _scrollController,
         physics: const ClampingScrollPhysics(),
-        child: TerminalRenderer(
-          buffer: widget.buffer,
-          showCursor: widget.showCursor,
-          fontSize: widget.fontSize,
-          fontFamily: widget.fontFamily,
-          onTap: widget.onTap,
+        child: widget.buffer.isAlternateScreen
+            ? TerminalRenderer(
+                buffer: widget.buffer,
+                showCursor: widget.showCursor,
+                fontSize: widget.fontSize,
+                fontFamily: widget.fontFamily,
+                onTap: widget.onTap,
+              )
+            : _TerminalWithHistoryRenderer(
+                buffer: widget.buffer,
+                showCursor: widget.showCursor,
+                fontSize: widget.fontSize,
+                fontFamily: widget.fontFamily,
+                onTap: widget.onTap,
+              ),
+      ),
+    );
+  }
+}
+
+/// 支持历史缓冲区的终端渲染器
+class _TerminalWithHistoryRenderer extends StatelessWidget {
+  final TerminalBuffer buffer;
+  final bool showCursor;
+  final double fontSize;
+  final String fontFamily;
+  final VoidCallback? onTap;
+
+  const _TerminalWithHistoryRenderer({
+    required this.buffer,
+    this.showCursor = true,
+    this.fontSize = 14.0,
+    this.fontFamily = 'JetBrainsMono',
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        color: ansi.AnsiColor.defaultBackground,
+        child: CustomPaint(
+          painter: _TerminalWithHistoryPainter(
+            buffer: buffer,
+            fontSize: fontSize,
+            fontFamily: fontFamily,
+            showCursor: showCursor,
+          ),
+          size: Size(
+            buffer.width * _getCharWidth(),
+            buffer.totalLineCount * _getLineHeight(),
+          ),
         ),
       ),
     );
+  }
+
+  double _getCharWidth() {
+    return fontSize * 0.6; // 近似字符宽度
+  }
+
+  double _getLineHeight() {
+    return fontSize * 1.2; // 行高
+  }
+}
+
+/// 支持历史缓冲区的终端画笔
+class _TerminalWithHistoryPainter extends CustomPainter {
+  final TerminalBuffer buffer;
+  final double fontSize;
+  final String fontFamily;
+  final bool showCursor;
+
+  _TerminalWithHistoryPainter({
+    required this.buffer,
+    required this.fontSize,
+    required this.fontFamily,
+    required this.showCursor,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final charWidth = fontSize * 0.6;
+    final lineHeight = fontSize * 1.2;
+
+    // 绘制历史缓冲区内容
+    for (int row = 0; row < buffer.historyLineCount; row++) {
+      final line = buffer.getLine(row);
+      if (line != null) {
+        _drawLine(canvas, line, row, charWidth, lineHeight);
+      }
+    }
+
+    // 绘制当前缓冲区内容
+    for (int row = 0; row < buffer.height; row++) {
+      final absoluteRow = buffer.historyLineCount + row;
+      final line = buffer.buffer[row];
+      _drawLine(canvas, line, absoluteRow, charWidth, lineHeight);
+    }
+
+    // 绘制光标（只在当前缓冲区中显示）
+    if (showCursor) {
+      final cursorRow = buffer.historyLineCount + buffer.cursor.row;
+      final cursorX = buffer.cursor.col * charWidth;
+      final cursorY = cursorRow * lineHeight;
+
+      final cursorPaint = Paint()
+        ..color = ansi.AnsiColor.defaultForeground
+        ..style = PaintingStyle.fill;
+
+      canvas.drawRect(
+        Rect.fromLTWH(cursorX, cursorY, charWidth, lineHeight),
+        cursorPaint,
+      );
+    }
+  }
+
+  void _drawLine(Canvas canvas, List<ansi.TerminalChar> line, int row, double charWidth, double lineHeight) {
+    for (int col = 0; col < line.length && col < buffer.width; col++) {
+      final char = line[col];
+      if (char.char.isNotEmpty && char.char != ' ') {
+        final x = col * charWidth;
+        final y = row * lineHeight;
+
+        _drawChar(canvas, char, x, y, charWidth, lineHeight);
+      }
+    }
+  }
+
+  void _drawChar(Canvas canvas, ansi.TerminalChar char, double x, double y, double charWidth, double lineHeight) {
+    // 绘制背景
+    if (char.backgroundColor != ansi.AnsiColor.defaultBackground) {
+      final bgPaint = Paint()
+        ..color = char.backgroundColor
+        ..style = PaintingStyle.fill;
+      canvas.drawRect(Rect.fromLTWH(x, y, charWidth, lineHeight), bgPaint);
+    }
+
+    // 绘制文字
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: char.char,
+        style: TextStyle(
+          color: char.foregroundColor,
+          fontSize: fontSize,
+          fontFamily: fontFamily,
+          fontWeight: char.style.bold ? FontWeight.bold : FontWeight.normal,
+          fontStyle: char.style.italic ? FontStyle.italic : FontStyle.normal,
+          decoration: char.style.underline ? TextDecoration.underline : TextDecoration.none,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    );
+
+    textPainter.layout();
+    textPainter.paint(canvas, Offset(x, y));
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) {
+    return true; // 总是重绘以确保内容更新
   }
 }
