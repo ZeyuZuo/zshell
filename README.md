@@ -159,8 +159,8 @@ lib/
 
 ## 📞 联系方式
 
-- 项目链接: [https://github.com/your-username/zshell](https://github.com/your-username/zshell)
-- 问题反馈: [Issues](https://github.com/your-username/zshell/issues)
+- 项目链接: [https://github.com/zeyuzuo/zshell](https://github.com/zeyuzuo/zshell)
+- 问题反馈: [Issues](https://github.com/zeyuzuo/zshell/issues)
 
 ## 🙏 致谢
 
