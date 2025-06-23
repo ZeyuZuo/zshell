@@ -6,9 +6,10 @@ class AppConstants {
   static const String appDescription = 'SSH连接管理工具';
 
   // 布局常量
-  static const double sidebarWidth = 280.0;
-  static const double sidebarMinWidth = 200.0;
-  static const double sidebarMaxWidth = 400.0;
+  static const double sidebarWidth = 240.0;
+  static const double sidebarMinWidth = 180.0;
+  static const double sidebarMaxWidth = 320.0;
+  static const double sidebarCollapsedWidth = 60.0;
   
   // 动画时长
   static const Duration animationDuration = Duration(milliseconds: 300);

@@ -19,6 +19,7 @@ class MainPage extends StatefulWidget {
 
 class _MainPageState extends State<MainPage> with TickerProviderStateMixin {
   int _selectedIndex = 0;
+  bool _isSidebarCollapsed = false;
 
   // 标签页管理
   final List<MainPageTab> _terminalTabs = [];
@@ -77,26 +78,37 @@ class _MainPageState extends State<MainPage> with TickerProviderStateMixin {
 
   /// 构建侧边栏
   Widget _buildSidebar() {
-    return Container(
-      width: AppConstants.sidebarWidth,
+    return AnimatedContainer(
+      duration: AppConstants.animationDuration,
+      width: _isSidebarCollapsed ? AppConstants.sidebarCollapsedWidth : AppConstants.sidebarWidth,
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
-        border: Border(
-          right: BorderSide(
-            color: Theme.of(context).dividerColor,
-            width: 1,
-          ),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+            Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.2),
+          ],
         ),
       ),
-      child: Column(
-        children: [
-          // 应用标题
-          _buildAppHeader(),
-          // 导航菜单
-          Expanded(
-            child: _buildNavigationMenu(),
-          ),
-        ],
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // 当宽度过小时（动画过程中），暂时隐藏内容以避免溢出
+          if (constraints.maxWidth < 50) {
+            return const SizedBox.shrink();
+          }
+
+          return Column(
+            children: [
+              // 应用标题和折叠按钮
+              _buildAppHeader(),
+              // 导航菜单
+              Expanded(
+                child: _buildNavigationMenu(),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -104,23 +116,82 @@ class _MainPageState extends State<MainPage> with TickerProviderStateMixin {
   /// 构建应用标题
   Widget _buildAppHeader() {
     return Container(
-      padding: const EdgeInsets.all(24),
-      child: Row(
-        children: [
-          Icon(
-            Icons.terminal,
-            size: 32,
-            color: Theme.of(context).colorScheme.primary,
-          ),
-          const SizedBox(width: 12),
-          Text(
-            AppConstants.appName,
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-              fontWeight: FontWeight.bold,
-              color: Theme.of(context).colorScheme.primary,
-            ),
-          ),
-        ],
+      padding: const EdgeInsets.all(12),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // 当宽度过小时（动画过程中），暂时隐藏内容以避免溢出
+          if (constraints.maxWidth < 50) {
+            return const SizedBox.shrink();
+          }
+
+          return _isSidebarCollapsed
+              ? Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.terminal,
+                        size: 24,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                      const SizedBox(height: 8),
+                      IconButton(
+                        onPressed: () {
+                          setState(() {
+                            _isSidebarCollapsed = !_isSidebarCollapsed;
+                          });
+                        },
+                        icon: const Icon(
+                          Icons.menu_open,
+                          size: 18,
+                        ),
+                        tooltip: '展开侧边栏',
+                        style: IconButton.styleFrom(
+                          padding: const EdgeInsets.all(6),
+                          minimumSize: const Size(28, 28),
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              : Row(
+                  children: [
+                    Icon(
+                      Icons.terminal,
+                      size: 28,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        AppConstants.appName,
+                        style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () {
+                        setState(() {
+                          _isSidebarCollapsed = !_isSidebarCollapsed;
+                        });
+                      },
+                      icon: const Icon(
+                        Icons.menu,
+                        size: 20,
+                      ),
+                      tooltip: '折叠侧边栏',
+                      style: IconButton.styleFrom(
+                        padding: const EdgeInsets.all(8),
+                        minimumSize: const Size(32, 32),
+                      ),
+                    ),
+                  ],
+                );
+        },
       ),
     );
   }
@@ -129,42 +200,113 @@ class _MainPageState extends State<MainPage> with TickerProviderStateMixin {
 
   /// 构建导航菜单
   Widget _buildNavigationMenu() {
-    return ListView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      itemCount: _navigationItems.length,
-      itemBuilder: (context, index) {
-        final item = _navigationItems[index];
-        final isSelected = index == _selectedIndex;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return ListView.builder(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          itemCount: _navigationItems.length,
+          itemBuilder: (context, index) {
+            final item = _navigationItems[index];
+            final isSelected = index == _selectedIndex;
 
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 2),
-          child: ListTile(
-            leading: Icon(
-              item.icon,
-              color: isSelected
-                  ? Theme.of(context).colorScheme.primary
-                  : Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-            title: Text(
-              item.label,
-              style: TextStyle(
-                color: isSelected
-                    ? Theme.of(context).colorScheme.primary
-                    : Theme.of(context).colorScheme.onSurfaceVariant,
-                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+            if (_isSidebarCollapsed) {
+              // 折叠状态：只显示图标
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Tooltip(
+                  message: item.label,
+                  child: Center(
+                    child: Material(
+                      color: isSelected
+                          ? Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.4)
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(12),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(12),
+                        onTap: () {
+                          setState(() {
+                            _selectedIndex = index;
+                          });
+                        },
+                        child: Container(
+                          width: 44,
+                          height: 44,
+                          alignment: Alignment.center,
+                          child: Icon(
+                            item.icon,
+                            size: 20,
+                            color: isSelected
+                                ? Theme.of(context).colorScheme.primary
+                                : Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }
+
+            // 展开状态：显示图标和文字
+            // 当宽度过小时（动画过程中），暂时隐藏以避免溢出
+            if (constraints.maxWidth < 100) {
+              return const SizedBox.shrink();
+            }
+
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.3)
+                      : null,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(16),
+                    onTap: () {
+                      setState(() {
+                        _selectedIndex = index;
+                      });
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            item.icon,
+                            size: 20,
+                            color: isSelected
+                                ? Theme.of(context).colorScheme.primary
+                                : Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                          const SizedBox(width: 16),
+                          Flexible(
+                            child: Text(
+                              item.label,
+                              style: TextStyle(
+                                color: isSelected
+                                    ? Theme.of(context).colorScheme.primary
+                                    : Theme.of(context).colorScheme.onSurfaceVariant,
+                                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                                fontSize: 14,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
               ),
-            ),
-            selected: isSelected,
-            selectedTileColor: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.3),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            onTap: () {
-              setState(() {
-                _selectedIndex = index;
-              });
-            },
-          ),
+            );
+          },
         );
       },
     );
@@ -247,8 +389,8 @@ class _MainPageState extends State<MainPage> with TickerProviderStateMixin {
       ),
       child: Row(
         children: [
-          // 标签页
-          Expanded(
+          // 标签页 - 移除Expanded包装以避免与isScrollable冲突
+          Flexible(
             child: TabBar(
               controller: _tabController!,
               isScrollable: true,
@@ -271,9 +413,14 @@ class _MainPageState extends State<MainPage> with TickerProviderStateMixin {
                         ),
                       ),
                       const SizedBox(width: 6),
-                      Text(
-                        tab.title,
-                        style: const TextStyle(fontSize: 12),
+                      // 使用Flexible包装文本以防止溢出
+                      Flexible(
+                        child: Text(
+                          tab.title,
+                          style: const TextStyle(fontSize: 12),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                        ),
                       ),
                       const SizedBox(width: 6),
                       GestureDetector(

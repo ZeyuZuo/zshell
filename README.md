@@ -1,6 +1,6 @@
 # ZShell - SSH连接管理工具
 
-一个基于Flutter开发的跨平台SSH连接管理shell工具应用，采用Material3设计风格，提供直观的左右分栏界面布局。
+一个基于Flutter开发的跨平台SSH连接管理shell工具应用，采用Material3设计风格，提供直观的左右分栏界面布局。developed by augment.
 
 ## 🚀 项目概述
 
@@ -86,7 +86,7 @@ dependencies:
 
 ### 1. 克隆项目
 ```bash
-git clone https://github.com/your-username/zshell.git
+git clone https://github.com/zeyuzuo/zshell.git
 cd zshell
 ```
 

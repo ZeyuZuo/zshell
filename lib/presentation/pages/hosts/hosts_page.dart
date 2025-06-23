@@ -208,8 +208,6 @@ class _HostsPageState extends State<HostsPage> {
                 isOnline: provider.getHostConnectionState(host.id),
                 onConnect: () => _connectToHost(host),
                 onEdit: () => _editHost(host),
-                onDelete: () => _deleteHost(host),
-                onTestConnection: () => _testConnection(host),
               );
             },
           ),
@@ -330,77 +328,12 @@ class _HostsPageState extends State<HostsPage> {
     }
   }
 
-  /// 测试主机连接
-  void _testConnection(SSHHost host) async {
-    final provider = context.read<SSHHostProvider>();
 
-    // 显示测试中的提示
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('正在测试连接到 ${host.name}...'),
-        duration: const Duration(seconds: 1),
-      ),
-    );
-
-    final isConnected = await provider.checkHostConnection(host.id);
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            isConnected
-                ? '${host.name} 连接成功'
-                : '${host.name} 连接失败',
-          ),
-          backgroundColor: isConnected
-              ? Colors.green
-              : Colors.red,
-        ),
-      );
-    }
-  }
 
   /// 编辑主机
   void _editHost(SSHHost host) {
     _showAddHostDialog(host);
   }
 
-  /// 删除主机
-  void _deleteHost(SSHHost host) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('确认删除'),
-        content: Text('确定要删除主机 "${host.name}" 吗？此操作无法撤销。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              Navigator.of(context).pop();
 
-              final provider = context.read<SSHHostProvider>();
-              final success = await provider.deleteHost(host.id);
-
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(success
-                        ? '已删除主机 ${host.name}'
-                        : provider.error ?? '删除失败'),
-                    backgroundColor: success
-                        ? null
-                        : Theme.of(context).colorScheme.error,
-                  ),
-                );
-              }
-            },
-            child: const Text('删除'),
-          ),
-        ],
-      ),
-    );
-  }
 }

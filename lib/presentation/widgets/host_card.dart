@@ -14,8 +14,6 @@ class HostCard extends StatelessWidget {
   final SSHHost host;
   final VoidCallback? onConnect;
   final VoidCallback? onEdit;
-  final VoidCallback? onDelete;
-  final VoidCallback? onTestConnection;
   final bool isOnline;
 
   const HostCard({
@@ -23,8 +21,6 @@ class HostCard extends StatelessWidget {
     required this.host,
     this.onConnect,
     this.onEdit,
-    this.onDelete,
-    this.onTestConnection,
     this.isOnline = false,
   });
 
@@ -32,133 +28,96 @@ class HostCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            // 状态指示器
-            Container(
-              width: 12,
-              height: 12,
-              decoration: BoxDecoration(
-                color: isOnline ? Colors.green : Colors.red,
-                shape: BoxShape.circle,
-              ),
-            ),
-            const SizedBox(width: 16),
-            // 主机信息
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    host.name,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: isOnline ? onConnect : null,
+        onDoubleTap: isOnline ? onConnect : null,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Row(
+            children: [
+              // 状态指示器
+              Container(
+                width: 14,
+                height: 14,
+                decoration: BoxDecoration(
+                  color: isOnline ? Colors.green : Colors.grey,
+                  shape: BoxShape.circle,
+                  boxShadow: isOnline ? [
+                    BoxShadow(
+                      color: Colors.green.withValues(alpha: 0.3),
+                      blurRadius: 4,
+                      spreadRadius: 1,
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${host.username}@${host.host}:${host.port}',
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.primary,
-                      fontFamily: 'monospace',
-                    ),
-                  ),
-                  if (host.description?.isNotEmpty == true) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      host.description!,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                  const SizedBox(height: 8),
-                  // 主机详细信息
-                  Wrap(
-                    spacing: 8,
-                    children: [
-                      _buildInfoChip(
-                        context,
-                        Icons.computer,
-                        host.host,
-                      ),
-                      _buildInfoChip(
-                        context,
-                        Icons.person,
-                        host.username,
-                      ),
-                      if (host.privateKeyPath != null)
-                        _buildInfoChip(
-                          context,
-                          Icons.key,
-                          '私钥',
-                        ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            // 操作按钮
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  onPressed: isOnline ? onConnect : null,
-                  icon: const Icon(Icons.play_arrow),
-                  tooltip: '连接',
-                  style: IconButton.styleFrom(
-                    backgroundColor: isOnline
-                        ? Theme.of(context).colorScheme.primaryContainer
-                        : null,
-                  ),
+                  ] : null,
                 ),
-                const SizedBox(height: 4),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
+              ),
+              const SizedBox(width: 20),
+              // 主机信息
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    IconButton(
-                      onPressed: onTestConnection,
-                      icon: const Icon(Icons.wifi_find, size: 20),
-                      tooltip: '测试连接',
+                    // 主机名称
+                    Text(
+                      host.name.isNotEmpty ? host.name : host.host,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 16,
+                      ),
                     ),
-                    IconButton(
-                      onPressed: onEdit,
-                      icon: const Icon(Icons.edit, size: 20),
-                      tooltip: '编辑',
+                    const SizedBox(height: 6),
+                    // 用户名@主机地址
+                    Text(
+                      '${host.username}@${host.host}',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: Theme.of(context).colorScheme.primary,
+                        fontFamily: 'JetBrainsMono',
+                        fontSize: 13,
+                      ),
                     ),
-                    IconButton(
-                      onPressed: onDelete,
-                      icon: const Icon(Icons.delete, size: 20),
-                      tooltip: '删除',
-                    ),
+                    // 注释信息
+                    if (host.description?.isNotEmpty == true) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        host.description!,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          fontSize: 12,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
                   ],
                 ),
-              ],
-            ),
-          ],
+              ),
+              // 编辑按钮
+              Container(
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: IconButton(
+                  onPressed: onEdit,
+                  icon: const Icon(Icons.edit_outlined, size: 18),
+                  tooltip: '编辑主机',
+                  style: IconButton.styleFrom(
+                    padding: const EdgeInsets.all(8),
+                    minimumSize: const Size(36, 36),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  /// 构建信息芯片
-  Widget _buildInfoChip(BuildContext context, IconData icon, String label) {
-    return Chip(
-      avatar: Icon(
-        icon,
-        size: 16,
-        color: Theme.of(context).colorScheme.onSurfaceVariant,
-      ),
-      label: Text(
-        label,
-        style: Theme.of(context).textTheme.bodySmall,
-      ),
-      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      visualDensity: VisualDensity.compact,
-    );
-  }
+
 }
